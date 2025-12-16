@@ -71,7 +71,7 @@ export class AstCodeSplitter implements Splitter {
             console.log(`🌳 Using AST splitter for ${language} file: ${filePath || 'unknown'}`);
 
             this.parser.setLanguage(langConfig.parser);
-            const tree = this.parser.parse(code);
+            const tree = this.parser.parse(code, undefined, { bufferSize: code.length * 2 });
 
             if (!tree.rootNode) {
                 console.warn(`[ASTSplitter] ⚠️  Failed to parse AST for ${language}, falling back to LangChain: ${filePath || 'unknown'}`);
