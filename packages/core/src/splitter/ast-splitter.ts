@@ -41,7 +41,25 @@ export class AstCodeSplitter implements Splitter {
         this.langchainFallback = new LangChainCodeSplitter(chunkSize, chunkOverlap);
     }
 
+    /**
+     * Sanitize UTF-8 content to remove problematic characters for tree-sitter
+     */
+    private sanitizeUtf8Content(content: string): string {
+        // Remove null bytes and other control characters that can cause tree-sitter issues
+        let sanitized = content
+            .replace(/\0/g, '') // Remove null bytes
+            .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove other control chars except \t, \n, \r
+            .replace(/\uFFFD/g, ''); // Remove replacement characters
+
+        // Ensure the string is valid UTF-8 by converting to buffer and back
+        const buffer = Buffer.from(sanitized, 'utf8');
+        return buffer.toString('utf8');
+    }
+
     async split(code: string, language: string, filePath?: string): Promise<CodeChunk[]> {
+        // Sanitize UTF-8 content to remove problematic characters
+        code = this.sanitizeUtf8Content(code);
+
         // Check if language is supported by AST splitter
         const langConfig = this.getLanguageConfig(language);
         if (!langConfig) {

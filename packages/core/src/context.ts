@@ -21,6 +21,8 @@ import { envManager } from './utils/env-manager';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import * as jschardet from 'jschardet';
+import * as iconv from 'iconv-lite';
 import { FileSynchronizer } from './sync/synchronizer';
 
 const DEFAULT_SUPPORTED_EXTENSIONS = [
@@ -215,6 +217,39 @@ export class Context {
      */
     async getPreparedCollection(codebasePath: string): Promise<void> {
         return this.prepareCollection(codebasePath);
+    }
+
+    /**
+     * Detect file encoding and convert to UTF-8
+     */
+    private async readFileWithEncoding(filePath: string): Promise<string> {
+        // Read file as buffer first for encoding detection
+        const buffer = await fs.promises.readFile(filePath);
+
+        // Detect encoding
+        const detected = jschardet.detect(buffer);
+        let content: string;
+
+        if (detected.encoding && detected.confidence > 0.7) {
+            const encoding = detected.encoding.toLowerCase();
+            // If it's not UTF-8, convert it
+            if (encoding !== 'utf-8' && encoding !== 'ascii') {
+                if (iconv.encodingExists(encoding)) {
+                    console.log(`[Context] 🔤 Converting ${path.basename(filePath)} from ${encoding} to UTF-8 (confidence: ${detected.confidence.toFixed(2)})`);
+                    content = iconv.decode(buffer, encoding);
+                } else {
+                    console.warn(`[Context] ⚠️  Unknown encoding ${encoding} for ${path.basename(filePath)}, using UTF-8`);
+                    content = buffer.toString('utf-8');
+                }
+            } else {
+                content = buffer.toString('utf-8');
+            }
+        } else {
+            // Default to UTF-8 if detection fails or low confidence
+            content = buffer.toString('utf-8');
+        }
+
+        return content;
     }
 
     /**
@@ -714,7 +749,7 @@ export class Context {
             const filePath = filePaths[i];
 
             try {
-                const content = await fs.promises.readFile(filePath, 'utf-8');
+                const content = await this.readFileWithEncoding(filePath);
                 const language = this.getLanguageFromExtension(path.extname(filePath));
                 const chunks = await this.codeSplitter.split(content, language, filePath);
 
