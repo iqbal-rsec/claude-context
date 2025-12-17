@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import { Context, FileSynchronizer } from "@zilliz/claude-context-core";
 import { SnapshotManager } from "./snapshot.js";
+import { isCurrentProcessLeader } from "@zilliz/claude-context-core";
 
 export class SyncManager {
     private context: Context;
@@ -15,6 +16,12 @@ export class SyncManager {
     public async handleSyncIndex(): Promise<void> {
         const syncStartTime = Date.now();
         console.log(`[SYNC-DEBUG] handleSyncIndex() called at ${new Date().toISOString()}`);
+
+        // Only the leader should perform background sync
+        if (!isCurrentProcessLeader()) {
+            console.log('[SYNC-DEBUG] Not the leader process. Skipping background sync.');
+            return;
+        }
 
         const indexedCodebases = this.snapshotManager.getIndexedCodebases();
 

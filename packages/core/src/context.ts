@@ -24,6 +24,7 @@ import * as crypto from 'crypto';
 import * as jschardet from 'jschardet';
 import * as iconv from 'iconv-lite';
 import { FileSynchronizer } from './sync/synchronizer';
+import { acquireCodebaseLock, releaseCodebaseLock } from './lock';
 
 const DEFAULT_SUPPORTED_EXTENSIONS = [
     // Programming languages
@@ -287,6 +288,27 @@ export class Context {
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
         forceReindex: boolean = false
     ): Promise<{ indexedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' }> {
+        // Acquire codebase lock to prevent concurrent indexing
+        const lockAcquired = await acquireCodebaseLock(codebasePath);
+        if (!lockAcquired) {
+            throw new Error(`Codebase '${codebasePath}' is already being indexed by another process`);
+        }
+
+        try {
+            return await this.indexCodebaseInternal(codebasePath, progressCallback, forceReindex);
+        } finally {
+            await releaseCodebaseLock(codebasePath);
+        }
+    }
+
+    /**
+     * Internal indexing implementation (called by indexCodebase wrapper)
+     */
+    private async indexCodebaseInternal(
+        codebasePath: string,
+        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        forceReindex: boolean = false
+    ): Promise<{ indexedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' }> {
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
         console.log(`[Context] 🚀 Starting to index codebase with ${searchType}: ${codebasePath}`);
@@ -361,6 +383,26 @@ export class Context {
     }
 
     async reindexByChange(
+        codebasePath: string,
+        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
+    ): Promise<{ added: number, removed: number, modified: number }> {
+        // Acquire codebase lock to prevent concurrent indexing
+        const lockAcquired = await acquireCodebaseLock(codebasePath);
+        if (!lockAcquired) {
+            throw new Error(`Codebase '${codebasePath}' is already being indexed by another process`);
+        }
+
+        try {
+            return await this.reindexByChangeInternal(codebasePath, progressCallback);
+        } finally {
+            await releaseCodebaseLock(codebasePath);
+        }
+    }
+
+    /**
+     * Internal reindex by change implementation (called by reindexByChange wrapper)
+     */
+    private async reindexByChangeInternal(
         codebasePath: string,
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
     ): Promise<{ added: number, removed: number, modified: number }> {
@@ -588,6 +630,26 @@ export class Context {
      * @param progressCallback Optional progress callback function
      */
     async clearIndex(
+        codebasePath: string,
+        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
+    ): Promise<void> {
+        // Acquire codebase lock to prevent concurrent operations
+        const lockAcquired = await acquireCodebaseLock(codebasePath);
+        if (!lockAcquired) {
+            throw new Error(`Codebase '${codebasePath}' is currently locked by another process`);
+        }
+
+        try {
+            return await this.clearIndexInternal(codebasePath, progressCallback);
+        } finally {
+            await releaseCodebaseLock(codebasePath);
+        }
+    }
+
+    /**
+     * Internal clear index implementation (called by clearIndex wrapper)
+     */
+    private async clearIndexInternal(
         codebasePath: string,
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
     ): Promise<void> {
