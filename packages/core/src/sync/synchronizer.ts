@@ -35,8 +35,16 @@ export class FileSynchronizer {
         if (stat.isDirectory()) {
             throw new Error(`Attempted to hash a directory: ${filePath}`);
         }
-        const content = await fs.readFile(filePath, 'utf-8');
-        return crypto.createHash('sha256').update(content).digest('hex');
+        const buffer = await fs.readFile(filePath);
+        return crypto.createHash('sha256').update(buffer).digest('hex');
+    }
+
+    /**
+     * Compute hash from buffer (raw file content)
+     * Public method for external callers who already have the buffer
+     */
+    public hashBuffer(buffer: Buffer): string {
+        return crypto.createHash('sha256').update(buffer).digest('hex');
     }
 
     private async generateFileHashes(dir: string): Promise<Map<string, string>> {
@@ -235,10 +243,6 @@ export class FileSynchronizer {
             console.log('[Synchronizer] Merkle DAG has changed. Comparing file states...');
             const fileChanges = this.compareStates(this.fileHashes, newFileHashes);
 
-            this.fileHashes = newFileHashes;
-            this.merkleDAG = newMerkleDAG;
-            await this.saveSnapshot();
-
             console.log(`[Synchronizer] Found changes: ${fileChanges.added.length} added, ${fileChanges.removed.length} removed, ${fileChanges.modified.length} modified.`);
             return fileChanges;
         }
@@ -277,7 +281,26 @@ export class FileSynchronizer {
         return this.fileHashes.get(filePath);
     }
 
-    private async saveSnapshot(): Promise<void> {
+    /**
+     * Update a single file hash incrementally and rebuild merkle tree
+     * Used during indexing to maintain consistency
+     */
+    public async updateFileHash(filePath: string, hash: string): Promise<void> {
+        const relativePath = path.relative(this.rootDir, filePath);
+        this.fileHashes.set(relativePath, hash);
+        this.merkleDAG = this.buildMerkleDAG(this.fileHashes);
+    }
+
+    /**
+     * Remove a file hash and rebuild merkle tree
+     * Used when files are deleted
+     */
+    public removeFileHash(relativePath: string): void {
+        this.fileHashes.delete(relativePath);
+        this.merkleDAG = this.buildMerkleDAG(this.fileHashes);
+    }
+
+    public async saveSnapshot(): Promise<void> {
         const merkleDir = path.dirname(this.snapshotPath);
         await fs.mkdir(merkleDir, { recursive: true });
 
@@ -313,10 +336,8 @@ export class FileSynchronizer {
             console.log(`Loaded snapshot from ${this.snapshotPath}`);
         } catch (error: any) {
             if (error.code === 'ENOENT') {
-                console.log(`Snapshot file not found at ${this.snapshotPath}. Generating new one.`);
-                this.fileHashes = await this.generateFileHashes(this.rootDir);
-                this.merkleDAG = this.buildMerkleDAG(this.fileHashes);
-                await this.saveSnapshot();
+                console.log(`Snapshot file not found at ${this.snapshotPath}. Generating empty one.`);
+                this.fileHashes = new Map();
             } else {
                 throw error;
             }

@@ -221,13 +221,14 @@ export class Context {
 
     /**
      * Detect file encoding and convert to UTF-8
+     * Returns raw buffer (for hashing) and decoded content string
      */
-    private async readFileWithEncoding(filePath: string): Promise<string> {
+    private async readFileWithEncoding(filePath: string): Promise<{ rawBuffer: Buffer; content: string }> {
         // Read file as buffer first for encoding detection
-        const buffer = await fs.promises.readFile(filePath);
+        const rawBuffer = await fs.promises.readFile(filePath);
 
         // Detect encoding
-        const detected = jschardet.detect(buffer);
+        const detected = jschardet.detect(rawBuffer);
         let content: string;
 
         if (detected.encoding && detected.confidence > 0.7) {
@@ -236,20 +237,20 @@ export class Context {
             if (encoding !== 'utf-8' && encoding !== 'ascii') {
                 if (iconv.encodingExists(encoding)) {
                     console.log(`[Context] 🔤 Converting ${path.basename(filePath)} from ${encoding} to UTF-8 (confidence: ${detected.confidence.toFixed(2)})`);
-                    content = iconv.decode(buffer, encoding);
+                    content = iconv.decode(rawBuffer, encoding);
                 } else {
                     console.warn(`[Context] ⚠️  Unknown encoding ${encoding} for ${path.basename(filePath)}, using UTF-8`);
-                    content = buffer.toString('utf-8');
+                    content = rawBuffer.toString('utf-8');
                 }
             } else {
-                content = buffer.toString('utf-8');
+                content = rawBuffer.toString('utf-8');
             }
         } else {
             // Default to UTF-8 if detection fails or low confidence
-            content = buffer.toString('utf-8');
+            content = rawBuffer.toString('utf-8');
         }
 
-        return content;
+        return { rawBuffer, content };
     }
 
     /**
@@ -293,7 +294,18 @@ export class Context {
         // 1. Load ignore patterns from various ignore files
         await this.loadIgnorePatterns(codebasePath);
 
-        // 2. Check and prepare vector collection
+        // 2. Initialize or get synchronizer for merkle tree tracking
+        const collectionName = this.getCollectionName(codebasePath);
+        let synchronizer = this.synchronizers.get(collectionName);
+
+        if (!synchronizer || forceReindex) {
+            console.log(`[Context] 📊 Initializing file synchronizer for merkle tree tracking...`);
+            synchronizer = new FileSynchronizer(codebasePath, this.ignorePatterns);
+            await synchronizer.initialize();
+            this.synchronizers.set(collectionName, synchronizer);
+        }
+
+        // 3. Check and prepare vector collection
         progressCallback?.({ phase: 'Preparing collection...', current: 0, total: 100, percentage: 0 });
         console.log(`Debug2: Preparing vector collection for codebase${forceReindex ? ' (FORCE REINDEX)' : ''}`);
         await this.prepareCollection(codebasePath, forceReindex);
@@ -308,7 +320,7 @@ export class Context {
             return { indexedFiles: 0, totalChunks: 0, status: 'completed' };
         }
 
-        // 3. Process each file with streaming chunk processing
+        // 4. Process each file with streaming chunk processing
         // Reserve 10% for preparation, 90% for actual indexing
         const indexingStartPercentage = 10;
         const indexingEndPercentage = 100;
@@ -317,6 +329,7 @@ export class Context {
         const result = await this.processFileList(
             codeFiles,
             codebasePath,
+            synchronizer,
             (filePath, fileIndex, totalFiles) => {
                 // Calculate progress percentage
                 const progressPercentage = indexingStartPercentage + (fileIndex / totalFiles) * indexingRange;
@@ -388,6 +401,7 @@ export class Context {
         // Handle removed files
         for (const file of removed) {
             await this.deleteFileChunks(collectionName, file);
+            currentSynchronizer.removeFileHash(file);
             updateProgress(`Removed ${file}`);
         }
 
@@ -404,6 +418,7 @@ export class Context {
             await this.processFileList(
                 filesToIndex,
                 codebasePath,
+                currentSynchronizer,
                 (filePath, fileIndex, totalFiles) => {
                     updateProgress(`Indexed ${filePath} (${fileIndex}/${totalFiles})`);
                 }
@@ -411,6 +426,13 @@ export class Context {
         }
 
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
+
+        // Save snapshot if we only have removeals
+        if (removed.length > 0) {
+            await currentSynchronizer.saveSnapshot();
+            console.log(`[Context] 💾 Final merkle snapshot saved after removals`);
+        }
+
         progressCallback?.({ phase: 'Re-indexing complete!', current: totalChanges, total: totalChanges, percentage: 100 });
 
         return { added: added.length, removed: removed.length, modified: modified.length };
@@ -733,6 +755,7 @@ export class Context {
     private async processFileList(
         filePaths: string[],
         codebasePath: string,
+        synchronizer?: FileSynchronizer,
         onFileProcessed?: (filePath: string, fileIndex: number, totalFiles: number) => void
     ): Promise<{ processedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' }> {
         const isHybrid = this.getIsHybrid();
@@ -744,12 +767,13 @@ export class Context {
         let processedFiles = 0;
         let totalChunks = 0;
         let limitReached = false;
+        let needsMerkleUpdate = false; // Track if we need to save merkle after buffer flush
 
         for (let i = 0; i < filePaths.length; i++) {
             const filePath = filePaths[i];
 
             try {
-                const content = await this.readFileWithEncoding(filePath);
+                const { rawBuffer, content } = await this.readFileWithEncoding(filePath);
                 const language = this.getLanguageFromExtension(path.extname(filePath));
                 const chunks = await this.codeSplitter.split(content, language, filePath);
 
@@ -769,6 +793,13 @@ export class Context {
                     if (chunkBuffer.length >= EMBEDDING_BATCH_SIZE) {
                         try {
                             await this.processChunkBuffer(chunkBuffer);
+
+                            // Save merkle tree after successful DB update if needed
+                            if (synchronizer && needsMerkleUpdate) {
+                                await synchronizer.saveSnapshot();
+                                console.log(`[Context] 💾 Merkle snapshot saved (checkpoint at ${processedFiles} files)`);
+                                needsMerkleUpdate = false;
+                            }
                         } catch (error) {
                             const searchType = isHybrid === true ? 'hybrid' : 'regular';
                             console.error(`[Context] ❌ Failed to process chunk batch for ${searchType}:`, error);
@@ -789,6 +820,18 @@ export class Context {
                 }
 
                 processedFiles++;
+
+                // Update merkle tree incrementally after each file
+                if (synchronizer) {
+                    const fileHash = synchronizer.hashBuffer(rawBuffer);
+                    await synchronizer.updateFileHash(filePath, fileHash);
+
+                    // Mark that we need to save after the next buffer flush
+                    if (processedFiles % 10 === 0) {
+                        needsMerkleUpdate = true;
+                    }
+                }
+
                 onFileProcessed?.(filePath, i + 1, filePaths.length);
 
                 if (limitReached) {
@@ -812,6 +855,12 @@ export class Context {
                     console.error('[Context] Stack trace:', error.stack);
                 }
             }
+        }
+
+        // Final merkle snapshot save at completion
+        if (synchronizer && processedFiles > 0) {
+            await synchronizer.saveSnapshot();
+            console.log(`[Context] 💾 Final merkle snapshot saved (${processedFiles} files indexed)`);
         }
 
         return {
