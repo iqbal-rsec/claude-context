@@ -1,5 +1,5 @@
-import { Context, MilvusVectorDatabase, MilvusRestfulVectorDatabase, AstCodeSplitter, LangChainCodeSplitter } from '@zilliz/claude-context-core';
-import { envManager } from '@zilliz/claude-context-core';
+import { Context, MilvusVectorDatabase, MilvusRestfulVectorDatabase, AstCodeSplitter, LangChainCodeSplitter } from '@iqbal-rsec/claude-context-core';
+import { envManager } from '@iqbal-rsec/claude-context-core';
 import * as path from 'path';
 
 // Try to load .env file

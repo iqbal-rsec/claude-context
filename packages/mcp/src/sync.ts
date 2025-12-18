@@ -1,7 +1,7 @@
 import * as fs from "fs";
-import { Context, FileSynchronizer } from "@zilliz/claude-context-core";
+import { Context, FileSynchronizer } from "@iqbal-rsec/claude-context-core";
 import { SnapshotManager } from "./snapshot.js";
-import { isCurrentProcessLeader } from "@zilliz/claude-context-core";
+import { isCurrentProcessLeader } from "@iqbal-rsec/claude-context-core";
 
 export class SyncManager {
     private context: Context;
