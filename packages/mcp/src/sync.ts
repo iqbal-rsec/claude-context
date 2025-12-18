@@ -23,6 +23,10 @@ export class SyncManager {
             return;
         }
 
+        // Fix orphaned "indexing" states before processing
+        // This auto-recovers codebases that were interrupted during indexing (e.g., server restart)
+        this.snapshotManager.fixOrphanedIndexingStates();
+
         const indexedCodebases = this.snapshotManager.getIndexedCodebases();
 
         if (indexedCodebases.length === 0) {

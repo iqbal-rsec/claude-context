@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { isCodebaseLocked } from "@iqbal-rsec/claude-context-core";
 import {
     CodebaseSnapshot,
     CodebaseSnapshotV1,
@@ -435,6 +436,83 @@ export class SnapshotManager {
         this.codebaseInfoMap.delete(codebasePath);
 
         console.log(`[SNAPSHOT-DEBUG] Completely removed codebase from snapshot: ${codebasePath}`);
+    }
+
+    /**
+     * Fix orphaned "indexing" states (where status is "indexing" but no lock file exists)
+     * This happens when MCP server restarts during indexing or a process crashes
+     * Auto-converts them to "indexed" so background sync can complete the remaining files
+     */
+    public fixOrphanedIndexingStates(): void {
+        console.log('[SNAPSHOT-VALIDATION] Checking for orphaned indexing states...');
+
+        try {
+            // Read snapshot from disk to get current state
+            if (!fs.existsSync(this.snapshotFilePath)) {
+                console.log('[SNAPSHOT-VALIDATION] No snapshot file exists. Nothing to fix.');
+                return;
+            }
+
+            const snapshotData = fs.readFileSync(this.snapshotFilePath, 'utf8');
+            const snapshot: CodebaseSnapshot = JSON.parse(snapshotData);
+
+            if (!this.isV2Format(snapshot)) {
+                console.log('[SNAPSHOT-VALIDATION] Snapshot is not v2 format. Skipping orphaned state detection.');
+                return;
+            }
+
+            let foundOrphaned = false;
+
+            // Check each codebase with "indexing" status
+            for (const [codebasePath, info] of Object.entries(snapshot.codebases)) {
+                if (info.status === 'indexing') {
+                    // Check if lock file exists
+                    const hasLock = isCodebaseLocked(codebasePath);
+
+                    if (!hasLock) {
+                        foundOrphaned = true;
+                        const lastProgress = 'indexingPercentage' in info ? info.indexingPercentage : 0;
+
+                        console.warn(`[SNAPSHOT-VALIDATION] Found orphaned indexing state: ${codebasePath} (${lastProgress}% progress, no lock file)`);
+                        console.log(`[SNAPSHOT-VALIDATION] Auto-recovering: changing status to "indexed" for background sync to complete`);
+
+                        // Convert to "indexed" status so background sync will process it
+                        // Background sync will use merkle tree to index only remaining files
+                        const recoveredInfo: CodebaseInfoIndexed = {
+                            status: 'indexed',
+                            indexedFiles: 0,  // Unknown - will be updated after sync completes
+                            totalChunks: 0,   // Unknown - will be updated after sync completes
+                            indexStatus: 'completed',
+                            lastUpdated: new Date().toISOString()
+                        };
+
+                        // Update memory state
+                        this.codebaseInfoMap.set(codebasePath, recoveredInfo);
+
+                        // Add to indexed list
+                        if (!this.indexedCodebases.includes(codebasePath)) {
+                            this.indexedCodebases.push(codebasePath);
+                        }
+
+                        // Remove from indexing state
+                        this.indexingCodebases.delete(codebasePath);
+                    } else {
+                        console.log(`[SNAPSHOT-VALIDATION] Codebase ${codebasePath} is indexing with active lock. OK.`);
+                    }
+                }
+            }
+
+            if (foundOrphaned) {
+                // Save updated snapshot to disk
+                this.saveCodebaseSnapshot();
+                console.log('[SNAPSHOT-VALIDATION] ✅ Fixed orphaned indexing states and saved snapshot');
+            } else {
+                console.log('[SNAPSHOT-VALIDATION] ✅ No orphaned indexing states found');
+            }
+
+        } catch (error: any) {
+            console.error('[SNAPSHOT-VALIDATION] Error fixing orphaned indexing states:', error);
+        }
     }
 
     public loadCodebaseSnapshot(): void {
