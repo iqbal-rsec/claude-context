@@ -333,12 +333,25 @@ export class SnapshotManager {
     /**
      * Set codebase to indexing status
      */
-    public setCodebaseIndexing(codebasePath: string, progress: number = 0): void {
+    public setCodebaseIndexing(
+        codebasePath: string,
+        progress: number = 0,
+        options?: { ignorePatterns?: string[]; customExtensions?: string[] }
+    ): void {
         this.indexingCodebases.set(codebasePath, progress);
 
-        // Remove from other states
-        this.indexedCodebases = this.indexedCodebases.filter(path => path !== codebasePath);
-        this.codebaseFileCount.delete(codebasePath);
+        // Remove from other states only if this is initial indexing (progress = 0)
+        if (progress === 0) {
+            this.indexedCodebases = this.indexedCodebases.filter(path => path !== codebasePath);
+            this.codebaseFileCount.delete(codebasePath);
+        }
+
+        // Determine patterns to use: provided options, or preserve existing
+        const existingInfo = this.codebaseInfoMap.get(codebasePath);
+        const patternsToUse = options?.ignorePatterns
+            || (existingInfo?.status === 'indexing' ? existingInfo.ignorePatterns : undefined);
+        const extensionsToUse = options?.customExtensions
+            || (existingInfo?.status === 'indexing' ? existingInfo.customExtensions : undefined);
 
         // Update info map
         const info: CodebaseInfoIndexing = {
@@ -346,6 +359,14 @@ export class SnapshotManager {
             indexingPercentage: progress,
             lastUpdated: new Date().toISOString()
         };
+
+        if (patternsToUse && patternsToUse.length > 0) {
+            info.ignorePatterns = patternsToUse;
+        }
+        if (extensionsToUse && extensionsToUse.length > 0) {
+            info.customExtensions = extensionsToUse;
+        }
+
         this.codebaseInfoMap.set(codebasePath, info);
     }
 
@@ -354,7 +375,8 @@ export class SnapshotManager {
      */
     public setCodebaseIndexed(
         codebasePath: string,
-        stats: { indexedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' }
+        stats: { indexedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' },
+        options?: { ignorePatterns?: string[]; customExtensions?: string[] }
     ): void {
         // Add to indexed list if not already there
         if (!this.indexedCodebases.includes(codebasePath)) {
@@ -374,6 +396,14 @@ export class SnapshotManager {
             indexStatus: stats.status,
             lastUpdated: new Date().toISOString()
         };
+
+        if (options?.ignorePatterns && options.ignorePatterns.length > 0) {
+            info.ignorePatterns = options.ignorePatterns;
+        }
+        if (options?.customExtensions && options.customExtensions.length > 0) {
+            info.customExtensions = options.customExtensions;
+        }
+
         this.codebaseInfoMap.set(codebasePath, info);
     }
 
@@ -476,6 +506,18 @@ export class SnapshotManager {
                         console.warn(`[SNAPSHOT-VALIDATION] Found orphaned indexing state: ${codebasePath} (${lastProgress}% progress, no lock file)`);
                         console.log(`[SNAPSHOT-VALIDATION] Auto-recovering: changing status to "indexed" for background sync to complete`);
 
+                        // Preserve custom patterns from the orphaned indexing state
+                        const indexingInfo = info as CodebaseInfoIndexing;
+                        const preservedPatterns = indexingInfo.ignorePatterns;
+                        const preservedExtensions = indexingInfo.customExtensions;
+
+                        if (preservedPatterns && preservedPatterns.length > 0) {
+                            console.log(`[SNAPSHOT-VALIDATION] Preserving ${preservedPatterns.length} custom ignore patterns for recovery`);
+                        }
+                        if (preservedExtensions && preservedExtensions.length > 0) {
+                            console.log(`[SNAPSHOT-VALIDATION] Preserving ${preservedExtensions.length} custom extensions for recovery`);
+                        }
+
                         // Convert to "indexed" status so background sync will process it
                         // Background sync will use merkle tree to index only remaining files
                         const recoveredInfo: CodebaseInfoIndexed = {
@@ -485,6 +527,14 @@ export class SnapshotManager {
                             indexStatus: 'completed',
                             lastUpdated: new Date().toISOString()
                         };
+
+                        // Preserve the custom patterns from the orphaned state
+                        if (preservedPatterns && preservedPatterns.length > 0) {
+                            recoveredInfo.ignorePatterns = preservedPatterns;
+                        }
+                        if (preservedExtensions && preservedExtensions.length > 0) {
+                            recoveredInfo.customExtensions = preservedExtensions;
+                        }
 
                         // Update memory state
                         this.codebaseInfoMap.set(codebasePath, recoveredInfo);

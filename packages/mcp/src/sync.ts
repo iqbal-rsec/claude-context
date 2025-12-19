@@ -68,8 +68,23 @@ export class SyncManager {
                 }
 
                 try {
+                    // Retrieve stored custom patterns from snapshot
+                    const codebaseInfo = this.snapshotManager.getCodebaseInfo(codebasePath);
+                    const options: { ignorePatterns?: string[]; customExtensions?: string[] } = {};
+
+                    if (codebaseInfo?.status === 'indexed') {
+                        if (codebaseInfo.ignorePatterns && codebaseInfo.ignorePatterns.length > 0) {
+                            options.ignorePatterns = codebaseInfo.ignorePatterns;
+                            console.log(`[SYNC-DEBUG] Using ${codebaseInfo.ignorePatterns.length} stored ignore patterns for '${codebasePath}'`);
+                        }
+                        if (codebaseInfo.customExtensions && codebaseInfo.customExtensions.length > 0) {
+                            options.customExtensions = codebaseInfo.customExtensions;
+                            console.log(`[SYNC-DEBUG] Using ${codebaseInfo.customExtensions.length} stored custom extensions for '${codebasePath}'`);
+                        }
+                    }
+
                     console.log(`[SYNC-DEBUG] Calling context.reindexByChange() for '${codebasePath}'`);
-                    const stats = await this.context.reindexByChange(codebasePath);
+                    const stats = await this.context.reindexByChange(codebasePath, undefined, options);
                     const codebaseElapsed = Date.now() - codebaseStartTime;
 
                     console.log(`[SYNC-DEBUG] Reindex stats for '${codebasePath}':`, stats);

@@ -288,15 +288,18 @@ export class ToolHandlers {
                 console.log(`[BACKGROUND-INDEX] Retrying indexing for previously failed codebase. Previous error: ${failedInfo?.errorMessage || 'Unknown error'}`);
             }
 
-            // Set to indexing status and save snapshot immediately
-            this.snapshotManager.setCodebaseIndexing(absolutePath, 0);
+            // Set to indexing status and save snapshot immediately with custom patterns
+            this.snapshotManager.setCodebaseIndexing(absolutePath, 0, {
+                ignorePatterns: customIgnorePatterns,
+                customExtensions: customFileExtensions
+            });
             this.snapshotManager.saveCodebaseSnapshot();
 
             // Track the codebase path for syncing
             trackCodebasePath(absolutePath);
 
             // Start background indexing - now safe to proceed
-            this.startBackgroundIndexing(absolutePath, forceReindex, splitterType);
+            this.startBackgroundIndexing(absolutePath, forceReindex, splitterType, customIgnorePatterns, customFileExtensions);
 
             const pathInfo = codebasePath !== absolutePath
                 ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
@@ -332,7 +335,13 @@ export class ToolHandlers {
         }
     }
 
-    private async startBackgroundIndexing(codebasePath: string, forceReindex: boolean, splitterType: string) {
+    private async startBackgroundIndexing(
+        codebasePath: string,
+        forceReindex: boolean,
+        splitterType: string,
+        customIgnorePatterns: string[] = [],
+        customFileExtensions: string[] = []
+    ) {
         const absolutePath = codebasePath;
         let lastSaveTime = 0; // Track last save timestamp
 
@@ -353,10 +362,22 @@ export class ToolHandlers {
             // Load ignore patterns from files first (including .ignore, .gitignore, etc.)
             await this.context.getLoadedIgnorePatterns(absolutePath);
 
+            // Add custom ignore patterns if provided
+            if (customIgnorePatterns.length > 0) {
+                console.log(`[BACKGROUND-INDEX] Adding ${customIgnorePatterns.length} custom ignore patterns`);
+                this.context.addCustomIgnorePatterns(customIgnorePatterns);
+            }
+
+            // Add custom file extensions if provided
+            if (customFileExtensions.length > 0) {
+                console.log(`[BACKGROUND-INDEX] Adding ${customFileExtensions.length} custom file extensions`);
+                this.context.addCustomExtensions(customFileExtensions);
+            }
+
             // Initialize file synchronizer with proper ignore patterns (including project-specific patterns)
             const { FileSynchronizer } = await import("@iqbal-rsec/claude-context-core");
             const ignorePatterns = this.context.getIgnorePatterns() || [];
-            console.log(`[BACKGROUND-INDEX] Using ignore patterns: ${ignorePatterns.join(', ')}`);
+            console.log(`[BACKGROUND-INDEX] Using ${ignorePatterns.length} total ignore patterns`);
             const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns);
             await synchronizer.initialize();
 
@@ -392,7 +413,10 @@ export class ToolHandlers {
             console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
 
             // Set codebase to indexed status with complete statistics
-            this.snapshotManager.setCodebaseIndexed(absolutePath, stats);
+            this.snapshotManager.setCodebaseIndexed(absolutePath, stats, {
+                ignorePatterns: customIgnorePatterns,
+                customExtensions: customFileExtensions
+            });
             this.indexingStats = { indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks };
 
             // Save snapshot after updating codebase lists

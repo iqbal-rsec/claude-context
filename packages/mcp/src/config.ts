@@ -38,6 +38,8 @@ interface CodebaseInfoBase {
 export interface CodebaseInfoIndexing extends CodebaseInfoBase {
     status: 'indexing';
     indexingPercentage: number;  // Current progress percentage
+    ignorePatterns?: string[];   // Custom ignore patterns used during indexing
+    customExtensions?: string[]; // Custom file extensions used during indexing
 }
 
 // Indexed state - when indexing completed successfully
@@ -46,6 +48,8 @@ export interface CodebaseInfoIndexed extends CodebaseInfoBase {
     indexedFiles: number;        // Number of files indexed
     totalChunks: number;         // Total number of chunks generated
     indexStatus: 'completed' | 'limit_reached';  // Status from indexing result
+    ignorePatterns?: string[];   // Custom ignore patterns used during indexing
+    customExtensions?: string[]; // Custom file extensions used during indexing
 }
 
 // Index failed state - when indexing failed

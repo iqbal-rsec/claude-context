@@ -384,7 +384,8 @@ export class Context {
 
     async reindexByChange(
         codebasePath: string,
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
+        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        options?: { ignorePatterns?: string[]; customExtensions?: string[] }
     ): Promise<{ added: number, removed: number, modified: number }> {
         // Acquire codebase lock to prevent concurrent indexing
         const lockAcquired = await acquireCodebaseLock(codebasePath);
@@ -393,7 +394,7 @@ export class Context {
         }
 
         try {
-            return await this.reindexByChangeInternal(codebasePath, progressCallback);
+            return await this.reindexByChangeInternal(codebasePath, progressCallback, options);
         } finally {
             await releaseCodebaseLock(codebasePath);
         }
@@ -404,7 +405,8 @@ export class Context {
      */
     private async reindexByChangeInternal(
         codebasePath: string,
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
+        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        options?: { ignorePatterns?: string[]; customExtensions?: string[] }
     ): Promise<{ added: number, removed: number, modified: number }> {
         const collectionName = this.getCollectionName(codebasePath);
         const synchronizer = this.synchronizers.get(collectionName);
@@ -412,6 +414,18 @@ export class Context {
         if (!synchronizer) {
             // Load project-specific ignore patterns before creating FileSynchronizer
             await this.loadIgnorePatterns(codebasePath);
+
+            // If custom patterns were provided (from snapshot), merge them with loaded patterns
+            if (options?.ignorePatterns && options.ignorePatterns.length > 0) {
+                console.log(`[Context] 📦 Using ${options.ignorePatterns.length} stored custom ignore patterns from snapshot`);
+                this.addCustomIgnorePatterns(options.ignorePatterns);
+            }
+
+            // If custom extensions were provided (from snapshot), add them
+            if (options?.customExtensions && options.customExtensions.length > 0) {
+                console.log(`[Context] 📦 Using ${options.customExtensions.length} stored custom extensions from snapshot`);
+                this.addCustomExtensions(options.customExtensions);
+            }
 
             // To be safe, let's initialize if it's not there.
             const newSynchronizer = new FileSynchronizer(codebasePath, this.ignorePatterns);
