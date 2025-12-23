@@ -9,6 +9,7 @@ export interface OllamaEmbeddingConfig {
     options?: Record<string, any>;
     dimension?: number; // Optional dimension parameter
     maxTokens?: number; // Optional max tokens parameter
+    apiKey?: string; // Optional API key for proxy authentication
 }
 
 export class OllamaEmbedding extends Embedding {
@@ -21,9 +22,13 @@ export class OllamaEmbedding extends Embedding {
     constructor(config: OllamaEmbeddingConfig) {
         super();
         this.config = config;
+
+        // Create custom fetch if API key is provided
+        const customFetch = this.createAuthenticatedFetch(config);
+
         this.client = new Ollama({
             host: config.host || 'http://127.0.0.1:11434',
-            fetch: config.fetch,
+            fetch: customFetch,
         });
 
         // Set dimension based on config or will be detected on first use
@@ -41,6 +46,32 @@ export class OllamaEmbedding extends Embedding {
         }
 
         // If no dimension is provided, it will be detected in the first embed call
+    }
+
+    /**
+     * Create a custom fetch function that adds Authorization header if API key is provided
+     */
+    private createAuthenticatedFetch(config: OllamaEmbeddingConfig): any {
+        // If no API key, return the original fetch or undefined
+        if (!config.apiKey) {
+            return config.fetch;
+        }
+
+        // Use the provided fetch or global fetch
+        const baseFetch = config.fetch || fetch;
+
+        // Return wrapped fetch that adds Authorization header
+        return async (url: string, options: any = {}) => {
+            const headers = {
+                ...options.headers,
+                'Authorization': `Bearer ${config.apiKey}`
+            };
+
+            return baseFetch(url, {
+                ...options,
+                headers
+            });
+        };
     }
 
     private setDefaultMaxTokensForModel(model: string): void {
@@ -157,9 +188,10 @@ export class OllamaEmbedding extends Embedding {
      */
     setHost(host: string): void {
         this.config.host = host;
+        const customFetch = this.createAuthenticatedFetch(this.config);
         this.client = new Ollama({
             host: host,
-            fetch: this.config.fetch,
+            fetch: customFetch,
         });
     }
 
